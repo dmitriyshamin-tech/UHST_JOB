@@ -73,7 +73,8 @@ FACEBOOK_APIFY_ACTOR = "apify/facebook-groups-scraper"
 # • "UX/UI Designers Ukraine"
 # • "Developers Ukraine"
 FACEBOOK_GROUP_URLS = [
-    # "https://www.facebook.com/groups/REPLACE_WITH_REAL_GROUP_ID",
+    "https://www.facebook.com/groups/ecu.club/",           # E-commerce Club Ukraine
+    "https://www.facebook.com/groups/149047461949955/",    # UA e-commerce group
 ]
 
 FACEBOOK_POSTS_LIMIT = 50   # posts per group to scan
@@ -84,3 +85,31 @@ JOB_SEEK_KEYWORDS = [
     "looking for job", "розгляну пропозиції", "рассмотрю предложения",
     "готовий до переїзду до Києва", "готова до переїзду",
 ]
+
+# ─── Robota.ua settings ───────────────────────────────────────────────────────
+ROBOTAUA_PERIOD = 1   # 1=last day
+ROBOTAUA_MAX_PAGES = 2
+# Robota.ua uses slug-style URLs: /ru/zapros/{slug}/kyiv
+ROBOTAUA_ROLE_SLUGS = [
+    "content-manager",
+    "контент-менеджер",
+    "designer",
+    "дизайнер",
+    "call-center",
+    "оператор-колл-центра",
+    "frontend-developer",
+    "backend-developer",
+    "python-developer",
+    "web-developer",
+    "керівник-відділу",
+]
+
+# ─── DOU.ua settings ──────────────────────────────────────────────────────────
+DOU_SEARCH_KEYWORDS = [
+    "eCommerce",
+    "e-commerce",
+    "content manager",
+    "designer",
+    "call center",
+]
+DOU_CITY = "Київ"

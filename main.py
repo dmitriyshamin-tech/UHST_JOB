@@ -16,7 +16,7 @@ from pathlib import Path
 
 import config
 from notifications import telegram
-from scrapers import facebook_apify, linkedin_apify, workua
+from scrapers import dou, facebook_apify, linkedin_apify, robotaua, workua
 
 SEEN_IDS_FILE = Path("data/seen_ids.json")
 
@@ -25,7 +25,7 @@ def load_seen() -> dict:
     if SEEN_IDS_FILE.exists():
         with open(SEEN_IDS_FILE, encoding="utf-8") as f:
             return json.load(f)
-    return {"workua": [], "linkedin": [], "facebook": []}
+    return {"workua": [], "linkedin": [], "facebook": [], "robota": [], "dou": []}
 
 
 def save_seen(seen: dict) -> None:
@@ -53,6 +53,28 @@ def main() -> None:
         print(f"  Work.ua: {len(new)} new (of {len(workua_results)} found)")
     except Exception as e:
         print(f"  Work.ua error: {e}")
+
+    # ── Robota.ua ──────────────────────────────────────────────────────────────
+    print("Scraping Robota.ua…")
+    try:
+        robota_results = robotaua.scrape()
+        new = dedupe(robota_results, seen.get("robota", []))
+        seen["robota"] = (seen.get("robota", []) + [c["id"] for c in new])[-2000:]
+        all_new.extend(new)
+        print(f"  Robota.ua: {len(new)} new (of {len(robota_results)} found)")
+    except Exception as e:
+        print(f"  Robota.ua error: {e}")
+
+    # ── DOU.ua ─────────────────────────────────────────────────────────────────
+    print("Scraping DOU.ua…")
+    try:
+        dou_results = dou.scrape()
+        new = dedupe(dou_results, seen.get("dou", []))
+        seen["dou"] = (seen.get("dou", []) + [c["id"] for c in new])[-2000:]
+        all_new.extend(new)
+        print(f"  DOU.ua: {len(new)} new (of {len(dou_results)} found)")
+    except Exception as e:
+        print(f"  DOU.ua error: {e}")
 
     # ── LinkedIn ───────────────────────────────────────────────────────────────
     if config.APIFY_API_TOKEN:
