@@ -1,20 +1,21 @@
 """
-Work.ua resume scraper — searches Kyiv resumes for e-commerce candidates.
+Work.ua resume scraper.
 
-Uses a link-first approach: finds every /resumes/ID/ link on the page,
-then walks up to the nearest card container to extract title + snippet.
-This is more robust than relying on specific class names that Work.ua changes.
+Work.ua blocks HTML scraping from GitHub Actions IPs (403).
+We use their internal JSON API instead — same approach that works for Robota.ua.
+
+Endpoint: https://api.work.ua/resumes
+Params: cityId=1 (Kyiv), period=1 (last day), searchText=keyword, page=0
 """
 
-import re
 import time
 from urllib.parse import quote
 
 import requests
-from bs4 import BeautifulSoup
 
 import config
 
+API_URL  = "https://api.work.ua/resumes"
 BASE_URL = "https://www.work.ua"
 
 HEADERS = {
@@ -23,122 +24,106 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "uk-UA,uk;q=0.9,ru;q=0.8,en;q=0.7",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "uk-UA,uk;q=0.9,ru;q=0.8",
+    "Origin": "https://www.work.ua",
+    "Referer": "https://www.work.ua/resumes-kyiv/",
 }
 
-RESUME_ID_RE = re.compile(r"/resumes/(\d+)/")
+KYIV_CITY_ID = 1
+_debug_printed = False
 
 
-def _build_url(keyword: str, page: int = 1) -> str:
-    q = quote(keyword)
-    url = f"{BASE_URL}/resumes-kyiv/?search={q}&period={config.WORKUA_PERIOD}"
-    if page > 1:
-        url += f"&page={page}"
-    return url
+def _fetch_api(keyword: str, page: int = 0) -> list[dict]:
+    params = {
+        "cityId": KYIV_CITY_ID,
+        "period": config.WORKUA_PERIOD,
+        "searchText": keyword,
+        "page": page,
+        "count": 20,
+    }
+    resp = requests.get(API_URL, params=params, headers=HEADERS, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, list):
+        return data
+    return data.get("documents") or data.get("items") or data.get("resumes") or []
 
 
-def _parse_page(html: str, url: str) -> list[dict]:
-    soup = BeautifulSoup(html, "html.parser")
+def _normalize(raw: dict) -> dict | None:
+    global _debug_printed
+    if not _debug_printed:
+        print(f"[Work.ua DEBUG] Fields: {list(raw.keys())}")
+        _debug_printed = True
 
-    # Find ALL links that point to a resume
-    resume_links = soup.find_all("a", href=RESUME_ID_RE)
+    resume_id = str(raw.get("resumeId") or raw.get("id") or "")
+    if not resume_id:
+        return None
 
-    if not resume_links:
-        # Debug: show what links are on the page
-        all_links = [a.get("href", "") for a in soup.find_all("a") if "/resumes/" in a.get("href", "")]
-        print(f"[Work.ua] DEBUG: 0 resume links at {url} | sample hrefs: {all_links[:5]}")
-        return []
+    name = str(raw.get("fullName") or raw.get("name") or "—").strip()
+    position = str(raw.get("speciality") or raw.get("position") or raw.get("profession") or "").strip()
+    salary = str(raw.get("salary") or raw.get("salaryAmount") or "").strip()
+    city = str((raw.get("city") or {}).get("name", "") if isinstance(raw.get("city"), dict) else raw.get("cityName") or "").strip()
 
-    print(f"[Work.ua] Found {len(resume_links)} resume links at {url}")
+    skills_raw = raw.get("skills") or raw.get("rubrics") or []
+    skills = ", ".join(
+        (s.get("name") or str(s)) if isinstance(s, dict) else str(s)
+        for s in skills_raw[:6]
+    )
 
-    results = []
-    for link_tag in resume_links:
-        try:
-            href = link_tag.get("href", "")
-            m = RESUME_ID_RE.search(href)
-            if not m:
-                continue
+    updated = str(raw.get("updatedDate") or raw.get("lastActivity") or raw.get("modifiedDate") or "")[:10]
 
-            resume_id = f"workua_{m.group(1)}"
-            title = link_tag.get_text(strip=True)
+    # URL from API or build from ID
+    url_field = str(raw.get("url") or raw.get("resumeUrl") or "").strip()
+    if url_field.startswith("http"):
+        resume_url = url_field
+    elif url_field.startswith("/"):
+        resume_url = f"{BASE_URL}{url_field}"
+    else:
+        resume_url = f"{BASE_URL}/resumes/{resume_id}/"
 
-            # Walk up the DOM to find the card container (usually 2-4 levels up)
-            card = link_tag.parent
-            for _ in range(5):
-                if card is None:
-                    break
-                tag = getattr(card, "name", "")
-                cls = " ".join(card.get("class", []))
-                if tag in ("article", "section", "li") or any(
-                    k in cls for k in ("card", "resume", "vacancy", "item")
-                ):
-                    break
-                card = card.parent
+    description = " | ".join(filter(None, [
+        position, skills,
+        f"Зарплата: {salary}" if salary else "",
+        city,
+    ]))
 
-            description = ""
-            date_str = ""
-            if card:
-                # Description: first <p> that is not the title link
-                for p in card.find_all("p"):
-                    txt = p.get_text(strip=True)
-                    if txt and txt != title:
-                        description = txt[:250]
-                        break
-
-                # Date: <time> tag or element with "мuted" / "date" class
-                date_el = card.find("time") or card.find(
-                    class_=re.compile(r"muted|date|ago|time", re.I)
-                )
-                if date_el:
-                    date_str = date_el.get_text(strip=True)
-
-            results.append({
-                "id": resume_id,
-                "title": title,
-                "description": description,
-                "date": date_str,
-                "url": f"{BASE_URL}{href}" if href.startswith("/") else href,
-            })
-        except Exception:
-            continue
-
-    return results
-
-
-def _is_ecommerce(resume: dict) -> bool:
-    text = f"{resume['title']} {resume['description']}".lower()
-    return any(kw.lower() in text for kw in config.ECOMMERCE_KEYWORDS)
+    return {
+        "id": f"workua_{resume_id}",
+        "title": f"{name} — {position}" if position else name,
+        "description": description[:300],
+        "date": updated,
+        "url": resume_url,
+        "source": "Work.ua",
+        "ecommerce_confirmed": any(
+            kw.lower() in f"{position} {skills}".lower()
+            for kw in config.ECOMMERCE_KEYWORDS
+        ),
+    }
 
 
 def scrape() -> list[dict]:
-    all_results: list[dict] = []
-    seen_in_run: set[str] = set()
+    results: list[dict] = []
+    seen: set[str] = set()
 
     for keyword in config.TARGET_ROLES:
-        for page in range(1, config.WORKUA_MAX_PAGES + 1):
-            url = _build_url(keyword, page)
+        for page in range(config.WORKUA_MAX_PAGES):
             try:
-                resp = requests.get(url, headers=HEADERS, timeout=20)
-                resp.raise_for_status()
+                items = _fetch_api(keyword, page)
             except Exception as e:
-                print(f"[Work.ua] Request failed {url}: {e}")
+                print(f"[Work.ua] API error '{keyword}' page {page}: {e}")
                 break
 
-            cards = _parse_page(resp.text, url)
-            if not cards:
+            if not items:
                 break
 
-            for card in cards:
-                if card["id"] in seen_in_run:
-                    continue
-                seen_in_run.add(card["id"])
-                card["source"] = "Work.ua"
-                card["ecommerce_confirmed"] = _is_ecommerce(card)
-                all_results.append(card)
+            for raw in items:
+                candidate = _normalize(raw)
+                if candidate and candidate["id"] not in seen:
+                    seen.add(candidate["id"])
+                    results.append(candidate)
 
-            time.sleep(2.5)
-
+            time.sleep(2)
         time.sleep(1)
 
-    return all_results
+    return results

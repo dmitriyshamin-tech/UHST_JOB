@@ -43,21 +43,30 @@ def _chunk_messages(blocks: list[str], header: str) -> list[str]:
 
 def _format_candidate(c: dict) -> str:
     badge = "✅" if c.get("ecommerce_confirmed") else "❓"
-    source_icon = {"Work.ua": "📋", "LinkedIn": "🔗", "Facebook": "💬"}.get(c["source"], "📌")
-    title = c.get("title", "—")
-    desc = c.get("description", "")
-    url = c.get("url", "")
-    date_str = c.get("date", "")
+    source_icon = {
+        "Work.ua": "📋", "Robota.ua": "📌",
+        "LinkedIn": "🔗", "Facebook": "💬", "DOU.ua": "💻",
+    }.get(c["source"], "📌")
 
-    lines = [
-        f"{badge} {source_icon} <b>{title}</b>",
-    ]
+    title    = c.get("title", "—")
+    desc     = c.get("description", "")
+    url      = c.get("url", "")
+    date_str = c.get("date", "")
+    is_anon  = c.get("is_anonymous", False)
+    needs_login = c.get("requires_login", False)
+
+    lines = [f"{badge} {source_icon} <b>{title}</b>"]
+
+    if is_anon:
+        lines.append("   👤 Анонімне резюме")
     if desc:
         lines.append(f"   {desc[:200]}")
     if date_str:
         lines.append(f"   📅 {date_str}")
     if url:
-        lines.append(f'   <a href="{url}">Відкрити профіль →</a>')
+        link_label = "Відкрити CV (потрібен вхід на Robota.ua) 🔐" if needs_login else "Відкрити профіль →"
+        lines.append(f'   <a href="{url}">{link_label}</a>')
+
     lines.append("")
     return "\n".join(lines)
 

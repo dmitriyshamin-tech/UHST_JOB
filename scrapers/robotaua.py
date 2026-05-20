@@ -46,22 +46,23 @@ def _fetch_page(keyword: str, page: int = 0) -> list[dict]:
 
 
 def _extract_url(raw: dict, resume_id: str) -> str:
-    """Try every known URL field; fall back to search page."""
+    """Try every known URL field; handle both absolute and relative URLs."""
     for field in ("resumeUrl", "url", "link", "profileUrl", "candidateUrl", "href"):
-        val = raw.get(field, "")
-        if val and val.startswith("http"):
+        val = str(raw.get(field) or "").strip()
+        if not val:
+            continue
+        # Absolute URL — use as-is
+        if val.startswith("http"):
             return val
+        # Relative URL like /ua/cv/12345 — prepend domain
+        if val.startswith("/"):
+            return f"https://robota.ua{val}"
 
-    # Try to build from ID using known Robota.ua patterns
-    if resume_id:
-        clean_id = resume_id.replace("robota_", "")
-        # Try slug from name
-        first = str(raw.get("firstName") or "").lower().strip()
-        last  = str(raw.get("lastName")  or "").lower().strip()
-        if first and last:
-            return f"https://robota.ua/candidates/{last}-{first}/{clean_id}"
-        return f"https://robota.ua/candidates/{clean_id}"
-
+    # Final fallback: search page for this speciality in Kyiv
+    speciality = str(raw.get("speciality") or "").strip()
+    from urllib.parse import quote
+    if speciality:
+        return f"https://robota.ua/ru/zapros/{quote(speciality)}/kyiv"
     return "https://robota.ua/candidates/"
 
 
@@ -115,6 +116,7 @@ def _normalize(raw: dict) -> dict | None:
     ]))
 
     url = _extract_url(raw, unique_id)
+    is_anon = bool(raw.get("isAnonymous"))
 
     return {
         "id": unique_id,
@@ -123,6 +125,8 @@ def _normalize(raw: dict) -> dict | None:
         "date": updated,
         "url": url,
         "source": "Robota.ua",
+        "requires_login": True,   # Robota.ua CV requires employer account
+        "is_anonymous": is_anon,
         "ecommerce_confirmed": any(
             kw.lower() in f"{position} {skills}".lower()
             for kw in config.ECOMMERCE_KEYWORDS

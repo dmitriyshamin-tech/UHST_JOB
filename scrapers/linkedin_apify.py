@@ -21,11 +21,16 @@ POLL_INTERVAL = 10   # seconds
 MAX_WAIT = 300       # 5 minutes max per run
 
 
+def _apify_actor_url(actor_id: str) -> str:
+    """Apify API requires username~actor-name format (tilde, not slash)."""
+    return f"{APIFY_BASE}/acts/{actor_id.replace('/', '~')}/runs"
+
+
 def _run_actor(actor_id: str, actor_input: dict) -> list[dict]:
     token = config.APIFY_API_TOKEN
     # Start actor run
     run_resp = requests.post(
-        f"{APIFY_BASE}/acts/{actor_id}/runs",
+        _apify_actor_url(actor_id),
         params={"token": token},
         json=actor_input,
         timeout=30,
