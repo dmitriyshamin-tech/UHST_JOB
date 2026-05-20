@@ -1,12 +1,5 @@
 """
-Robota.ua candidate/resume scraper.
-
-Robota.ua is a React SPA so the page HTML is minimal — we call their
-internal JSON API instead of scraping rendered HTML.
-
-Endpoint discovered via browser DevTools:
-  GET https://employer-api.robota.ua/cvdb/resumes
-  Params: cityId=1 (Kyiv), period=1 (last day), searchText=keyword, page=0
+Robota.ua candidate/resume scraper via internal JSON API.
 """
 
 import time
@@ -16,8 +9,6 @@ import requests
 import config
 
 API_URL = "https://employer-api.robota.ua/cvdb/resumes"
-RESUME_URL = "https://robota.ua/candidates/resume/{resume_id}"
-
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -31,6 +22,7 @@ HEADERS = {
 }
 
 KYIV_CITY_ID = 1
+_debug_printed = False  # print raw fields once per run
 
 
 def _fetch_page(keyword: str, page: int = 0) -> list[dict]:
@@ -45,40 +37,91 @@ def _fetch_page(keyword: str, page: int = 0) -> list[dict]:
         resp = requests.get(API_URL, params=params, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         data = resp.json()
-        # API returns {"documents": [...], "total": N} or just a list
         if isinstance(data, list):
             return data
-        return data.get("documents") or data.get("items") or []
+        return data.get("documents") or data.get("items") or data.get("resumes") or []
     except Exception as e:
         print(f"[Robota.ua] API error for '{keyword}' page {page}: {e}")
         return []
 
 
+def _extract_url(raw: dict, resume_id: str) -> str:
+    """Try every known URL field; fall back to search page."""
+    for field in ("resumeUrl", "url", "link", "profileUrl", "candidateUrl", "href"):
+        val = raw.get(field, "")
+        if val and val.startswith("http"):
+            return val
+
+    # Try to build from ID using known Robota.ua patterns
+    if resume_id:
+        clean_id = resume_id.replace("robota_", "")
+        # Try slug from name
+        first = str(raw.get("firstName") or "").lower().strip()
+        last  = str(raw.get("lastName")  or "").lower().strip()
+        if first and last:
+            return f"https://robota.ua/candidates/{last}-{first}/{clean_id}"
+        return f"https://robota.ua/candidates/{clean_id}"
+
+    return "https://robota.ua/candidates/"
+
+
 def _normalize(raw: dict) -> dict | None:
-    resume_id = str(raw.get("resumeId") or raw.get("id") or "")
+    global _debug_printed
+    if not _debug_printed:
+        print(f"[Robota.ua DEBUG] Available fields: {list(raw.keys())}")
+        _debug_printed = True
+
+    # Try several possible ID field names
+    resume_id = str(
+        raw.get("resumeId") or raw.get("id") or raw.get("cvId") or raw.get("resumeid") or ""
+    )
     if not resume_id:
         return None
 
-    name = raw.get("fullName") or raw.get("name") or "—"
-    position = raw.get("profession") or raw.get("position") or raw.get("title") or ""
-    salary = raw.get("salary") or ""
-    experience = raw.get("experience") or ""
-    skills_raw = raw.get("skills") or raw.get("rubrics") or []
-    skills = ", ".join(
-        s.get("name", "") if isinstance(s, dict) else str(s)
-        for s in skills_raw[:6]
-    )
-    updated = str(raw.get("lastActivity") or raw.get("updateDate") or "")[:10]
-    city = (raw.get("city") or {}).get("name", "") if isinstance(raw.get("city"), dict) else str(raw.get("city") or "")
+    unique_id = f"robota_{resume_id}"
 
-    description = " | ".join(filter(None, [position, skills, f"Зарплата: {salary}" if salary else "", city]))
+    first = str(raw.get("firstName") or raw.get("name") or "").strip()
+    last  = str(raw.get("lastName")  or "").strip()
+    name  = f"{first} {last}".strip() or "—"
+
+    position = str(
+        raw.get("profession") or raw.get("position") or raw.get("title") or
+        raw.get("speciality") or ""
+    ).strip()
+
+    salary = str(raw.get("salary") or raw.get("salaryAmount") or "").strip()
+
+    skills_raw = raw.get("skills") or raw.get("rubrics") or raw.get("tags") or []
+    if isinstance(skills_raw, list):
+        skills = ", ".join(
+            (s.get("name") or s.get("title") or str(s)) if isinstance(s, dict) else str(s)
+            for s in skills_raw[:6]
+        )
+    else:
+        skills = str(skills_raw)
+
+    updated = str(
+        raw.get("lastActivity") or raw.get("updateDate") or
+        raw.get("modifiedDate") or raw.get("date") or ""
+    )[:10]
+
+    city_raw = raw.get("city") or raw.get("cityName") or raw.get("location") or {}
+    city = city_raw.get("name", "") if isinstance(city_raw, dict) else str(city_raw)
+
+    description = " | ".join(filter(None, [
+        position, skills,
+        f"Зарплата: {salary}" if salary else "",
+        city,
+    ]))
+
+    url = _extract_url(raw, unique_id)
 
     return {
-        "id": f"robota_{resume_id}",
+        "id": unique_id,
         "title": f"{name} — {position}" if position else name,
         "description": description[:300],
         "date": updated,
-        "url": RESUME_URL.format(resume_id=resume_id),
+        "url": url,
         "source": "Robota.ua",
         "ecommerce_confirmed": any(
             kw.lower() in f"{position} {skills}".lower()
@@ -91,25 +134,21 @@ def scrape() -> list[dict]:
     results: list[dict] = []
     seen: set[str] = set()
 
-    # Use slug list from config — convert hyphens back to spaces for API search
-    keywords = [slug.replace("-", " ") for slug in config.ROBOTAUA_ROLE_SLUGS]
-    # dedupe keyword list
-    keywords = list(dict.fromkeys(keywords))
+    keywords = list(dict.fromkeys(
+        slug.replace("-", " ") for slug in config.ROBOTAUA_ROLE_SLUGS
+    ))
 
     for keyword in keywords:
         for page in range(config.ROBOTAUA_MAX_PAGES):
             items = _fetch_page(keyword, page)
             if not items:
                 break
-
             for raw in items:
                 candidate = _normalize(raw)
                 if candidate and candidate["id"] not in seen:
                     seen.add(candidate["id"])
                     results.append(candidate)
-
             time.sleep(2)
-
         time.sleep(1)
 
     return results

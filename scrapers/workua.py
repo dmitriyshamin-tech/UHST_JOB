@@ -1,11 +1,9 @@
 """
 Work.ua resume scraper — searches Kyiv resumes for e-commerce candidates.
 
-Strategy:
-  1. For each target role keyword search Work.ua resumes in Kyiv, last N days.
-  2. Collect resume cards (title + snippet shown in listing).
-  3. Mark as "confirmed e-commerce" if snippet contains e-commerce keywords.
-  4. Always include all results so the user sees the full picture; badge shows confidence.
+Uses a link-first approach: finds every /resumes/ID/ link on the page,
+then walks up to the nearest card container to extract title + snippet.
+This is more robust than relying on specific class names that Work.ua changes.
 """
 
 import re
@@ -29,6 +27,8 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
+RESUME_ID_RE = re.compile(r"/resumes/(\d+)/")
+
 
 def _build_url(keyword: str, page: int = 1) -> str:
     q = quote(keyword)
@@ -38,48 +38,68 @@ def _build_url(keyword: str, page: int = 1) -> str:
     return url
 
 
-def _parse_page(html: str) -> list[dict]:
+def _parse_page(html: str, url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
+
+    # Find ALL links that point to a resume
+    resume_links = soup.find_all("a", href=RESUME_ID_RE)
+
+    if not resume_links:
+        # Debug: show what links are on the page
+        all_links = [a.get("href", "") for a in soup.find_all("a") if "/resumes/" in a.get("href", "")]
+        print(f"[Work.ua] DEBUG: 0 resume links at {url} | sample hrefs: {all_links[:5]}")
+        return []
+
+    print(f"[Work.ua] Found {len(resume_links)} resume links at {url}")
+
     results = []
-
-    # Work.ua resume cards sit inside a main card block
-    cards = soup.select("div.card-work, div.resume-link, article")
-
-    for card in cards:
+    for link_tag in resume_links:
         try:
-            link_tag = card.select_one("a[href*='/resumes/']")
-            if not link_tag:
-                continue
-
             href = link_tag.get("href", "")
-            m = re.search(r"/resumes/(\d+)/", href)
+            m = RESUME_ID_RE.search(href)
             if not m:
                 continue
 
             resume_id = f"workua_{m.group(1)}"
             title = link_tag.get_text(strip=True)
 
-            # Description snippet (varies by Work.ua markup version)
-            desc_tag = (
-                card.select_one("p.mt-xs")
-                or card.select_one(".card-body p")
-                or card.select_one("p")
-            )
-            description = desc_tag.get_text(strip=True) if desc_tag else ""
+            # Walk up the DOM to find the card container (usually 2-4 levels up)
+            card = link_tag.parent
+            for _ in range(5):
+                if card is None:
+                    break
+                tag = getattr(card, "name", "")
+                cls = " ".join(card.get("class", []))
+                if tag in ("article", "section", "li") or any(
+                    k in cls for k in ("card", "resume", "vacancy", "item")
+                ):
+                    break
+                card = card.parent
 
-            # Update date label
-            date_tag = card.select_one("time") or card.select_one(".text-muted")
-            date_str = date_tag.get_text(strip=True) if date_tag else ""
+            description = ""
+            date_str = ""
+            if card:
+                # Description: first <p> that is not the title link
+                for p in card.find_all("p"):
+                    txt = p.get_text(strip=True)
+                    if txt and txt != title:
+                        description = txt[:250]
+                        break
 
-            results.append(
-                {
-                    "id": resume_id,
-                    "title": title,
-                    "description": description,
-                    "date": date_str,
-                    "url": f"{BASE_URL}{href}" if href.startswith("/") else href,
-                }
-            )
+                # Date: <time> tag or element with "мuted" / "date" class
+                date_el = card.find("time") or card.find(
+                    class_=re.compile(r"muted|date|ago|time", re.I)
+                )
+                if date_el:
+                    date_str = date_el.get_text(strip=True)
+
+            results.append({
+                "id": resume_id,
+                "title": title,
+                "description": description,
+                "date": date_str,
+                "url": f"{BASE_URL}{href}" if href.startswith("/") else href,
+            })
         except Exception:
             continue
 
@@ -102,12 +122,12 @@ def scrape() -> list[dict]:
                 resp = requests.get(url, headers=HEADERS, timeout=20)
                 resp.raise_for_status()
             except Exception as e:
-                print(f"[Work.ua] request failed {url}: {e}")
+                print(f"[Work.ua] Request failed {url}: {e}")
                 break
 
-            cards = _parse_page(resp.text)
+            cards = _parse_page(resp.text, url)
             if not cards:
-                break  # no more pages
+                break
 
             for card in cards:
                 if card["id"] in seen_in_run:
@@ -117,7 +137,7 @@ def scrape() -> list[dict]:
                 card["ecommerce_confirmed"] = _is_ecommerce(card)
                 all_results.append(card)
 
-            time.sleep(2.5)  # polite delay between requests
+            time.sleep(2.5)
 
         time.sleep(1)
 
