@@ -1,10 +1,10 @@
 name: E-commerce Candidate Monitor
 
 on:
-  schedule:
-    # 07:00 UTC = 10:00 Kyiv summer (EEST) / 09:00 winter (EET)
-    - cron: "0 7 * * *"
-  workflow_dispatch:   # allows manual run from GitHub Actions UI
+  # Schedule disabled — uncomment to re-enable daily run at 10:00 Kyiv
+  # schedule:
+  #   - cron: "0 7 * * *"
+  workflow_dispatch:   # manual run only from GitHub Actions UI
 
 permissions:
   contents: write      # needed to commit seen_ids.json back to repo
