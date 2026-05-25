@@ -45,25 +45,17 @@ def _fetch_page(keyword: str, page: int = 0) -> list[dict]:
         return []
 
 
-def _extract_url(raw: dict, resume_id: str) -> str:
-    """Try every known URL field; handle both absolute and relative URLs."""
-    for field in ("resumeUrl", "url", "link", "profileUrl", "candidateUrl", "href"):
-        val = str(raw.get(field) or "").strip()
-        if not val:
-            continue
-        # Absolute URL — use as-is
-        if val.startswith("http"):
-            return val
-        # Relative URL like /ua/cv/12345 — prepend domain
-        if val.startswith("/"):
-            return f"https://robota.ua{val}"
-
-    # Final fallback: search page for this speciality in Kyiv
-    speciality = str(raw.get("speciality") or "").strip()
+def _extract_url(raw: dict) -> str:
+    """
+    Return a PUBLICLY accessible URL — no employer login required.
+    Robota.ua individual CV pages (/ua/cv/ID) require employer auth → 404.
+    Instead we link to the public search results for that speciality in Kyiv.
+    """
     from urllib.parse import quote
+    speciality = str(raw.get("speciality") or "").strip()
     if speciality:
         return f"https://robota.ua/ru/zapros/{quote(speciality)}/kyiv"
-    return "https://robota.ua/candidates/"
+    return "https://robota.ua/ru/zapros/kyiv"
 
 
 def _normalize(raw: dict) -> dict | None:
@@ -115,7 +107,7 @@ def _normalize(raw: dict) -> dict | None:
         city,
     ]))
 
-    url = _extract_url(raw, unique_id)
+    url = _extract_url(raw)
     is_anon = bool(raw.get("isAnonymous"))
 
     return {

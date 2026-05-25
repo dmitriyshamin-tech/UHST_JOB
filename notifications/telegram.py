@@ -64,7 +64,10 @@ def _format_candidate(c: dict) -> str:
     if date_str:
         lines.append(f"   📅 {date_str}")
     if url:
-        link_label = "Відкрити CV (потрібен вхід на Robota.ua) 🔐" if needs_login else "Відкрити профіль →"
+        if needs_login:
+            link_label = "🔍 Знайти таких кандидатів на Robota.ua →"
+        else:
+            link_label = "Відкрити профіль →"
         lines.append(f'   <a href="{url}">{link_label}</a>')
 
     lines.append("")
